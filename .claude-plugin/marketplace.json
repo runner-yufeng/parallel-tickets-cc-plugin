@@ -1,0 +1,20 @@
+{
+  "name": "parallel-tickets",
+  "owner": {
+    "name": "runner-yufeng",
+    "url": "https://github.com/runner-yufeng"
+  },
+  "metadata": {
+    "description": "DAG-driven parallel Claude Code sessions in tmux panes. Each ticket gets its own worktree + session; an orchestrator spawns downstream as blockers complete.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "parallel-tickets",
+      "source": "./",
+      "description": "Orchestrate parallel Claude sessions working on a DAG of Linear or GitHub Issues. Each unblocked ticket gets a tmux pane + git worktree; downstream auto-spawns as blockers complete.",
+      "category": "workflow",
+      "tags": ["tmux", "orchestration", "linear", "github-issues", "parallel", "worktree"]
+    }
+  ]
+}

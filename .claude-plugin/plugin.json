@@ -1,0 +1,24 @@
+{
+  "name": "parallel-tickets",
+  "version": "0.1.0",
+  "description": "Orchestrate parallel Claude Code sessions working on a DAG of tickets. Each unblocked ticket gets its own git worktree + tmux pane; an orchestrator spawns downstream sessions as blockers complete. Supports Linear and GitHub Issues.",
+  "author": {
+    "name": "runner-yufeng",
+    "url": "https://github.com/runner-yufeng"
+  },
+  "homepage": "https://github.com/runner-yufeng/parallel-tickets-cc-plugin",
+  "repository": "https://github.com/runner-yufeng/parallel-tickets-cc-plugin",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "tmux",
+    "orchestration",
+    "parallel",
+    "linear",
+    "github-issues",
+    "workflow",
+    "worktree",
+    "dag"
+  ],
+  "skills": ["./skills/"]
+}
