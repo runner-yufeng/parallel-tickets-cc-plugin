@@ -1,6 +1,6 @@
 # parallel-tickets-cc-plugin
 
-A Claude Code plugin that orchestrates parallel Claude sessions working on a DAG of tickets. Each unblocked ticket gets its own git worktree and a dedicated tmux pane with a Claude Code session; an orchestrator polls the tracker (Linear or GitHub Issues) every 2 minutes and spawns downstream sessions as blockers complete.
+A Claude Code plugin that orchestrates parallel Claude sessions working on a DAG of tickets. Each unblocked ticket gets its own git worktree and a dedicated tmux pane with a Claude Code session; a **cron-driven bash script** (not a Claude session — deterministic, free to run) polls the tracker (Linear or GitHub Issues) every 2 minutes and spawns downstream sessions as blockers complete.
 
 ## Install
 
@@ -36,12 +36,11 @@ Then it:
 
 ## Prereqs
 
-- `tmux`
-- `git` + `gh` CLI (if GitHub tracker)
-- `jq`
+- `tmux`, `git`, `jq`, `curl`
+- `gh` CLI (if GitHub tracker)
 - `claude` CLI with `--dangerously-skip-permissions` aliased or explicitly passed
-- Linear MCP authenticated **or** `LINEAR_API_KEY` env var (if Linear tracker)
-- `cron` or `launchd` (orchestrator runs as a periodic job)
+- `LINEAR_API_KEY` (if Linear tracker) — written to `$STATE_DIR/.env` chmod 600 at setup
+- `cron` (default) or `launchd` for periodic polling; macOS users may need to grant Full Disk Access to `cron`
 
 ## State
 

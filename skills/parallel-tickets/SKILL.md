@@ -1,11 +1,11 @@
 ---
 name: parallel-tickets
-description: Orchestrate parallel Claude Code sessions working on a DAG of tickets. Each unblocked ticket gets a dedicated tmux pane with its own git worktree and claude session; an orchestrator polls the tracker (Linear or GitHub Issues) and spawns downstream sessions as blockers complete. Use when the user asks to work multiple tickets in parallel, spawn parallel sessions, or describes a ticket DAG to execute.
+description: Orchestrate parallel Claude Code sessions working on a DAG of tickets. Each unblocked ticket gets a dedicated tmux pane with its own git worktree and claude session; a cron-driven bash script polls the tracker (Linear or GitHub Issues) every 2 minutes and spawns downstream sessions as blockers complete. Use when the user asks to work multiple tickets in parallel, spawn parallel sessions, or describes a ticket DAG to execute.
 ---
 
 # Parallel Ticket Orchestrator
 
-Spin up one Claude session per unblocked ticket, each in its own tmux pane + git worktree. An orchestrator auto-spawns downstream sessions as blockers complete.
+Spin up one Claude session per unblocked ticket, each in its own tmux pane + git worktree. A deterministic bash script (not a Claude session) polls the tracker every 2 min and spawns downstream sessions as blockers complete.
 
 ## When to use
 
@@ -21,9 +21,10 @@ Spin up one Claude session per unblocked ticket, each in its own tmux pane + git
 
 ## Prereqs (verify first, don't assume)
 
-- `tmux` installed (`which tmux`)
+- `tmux`, `git`, `jq`, `curl` installed
 - `claude` CLI with `--dangerously-skip-permissions` aliased OR explicitly passed
-- If tracker=linear: Linear MCP authenticated (`mcp__linear-server__list_teams` works)
+- `cron` reachable (macOS: may need Full Disk Access for `cron`) OR user prefers `launchd`
+- If tracker=linear: `LINEAR_API_KEY` set in env OR user will provide one
 - If tracker=github: `gh auth status` clean
 
 ## Inputs to collect
@@ -31,119 +32,132 @@ Spin up one Claude session per unblocked ticket, each in its own tmux pane + git
 Ask the user:
 
 1. **Tracker**: `linear` or `github`
-2. **Initiative name** (short slug for state dir + orchestrator session name)
-3. **Tickets**: existing IDs/numbers, OR specs to create (title + body + labels for each)
+2. **Initiative name** (short slug; used for state dir, orchestrator session name, cron entry grep pattern)
+3. **Tickets**: existing IDs/numbers, OR specs to create (title + body + labels)
 4. **Dependency edges**: `{ "B": ["A"] }` = B depends on A. Validate: no cycles, no unknown IDs.
-5. **Base branch** (default: repo default; in this repo's CLAUDE.md it may be `dogfood` not `main`)
-6. **Repo path** (default: `git rev-parse --show-toplevel` from cwd)
+5. **Base branch** (default: repo default; e.g. `dogfood` not `main` in some repos)
+6. **Repo path** (default: `git rev-parse --show-toplevel`)
+7. **Linear API key** (linear only; will be written to `$STATE_DIR/.env` chmod 600)
 
 ## Execution
 
 ### 1. Create tickets (if needed)
 
-- **Linear**: use `mcp__linear-server__save_issue`, one per ticket. Pass `team`, `title`, `description`, optional `parentId`, `labels`, `priority`. Record the returned `id`/`url`.
-- **GitHub**: `gh issue create --title "..." --body-file /tmp/body.md --label "..." --json number,url` (use heredoc for body to preserve formatting).
+- **Linear**: use `mcp__linear-server__save_issue`; record `id` + `url`.
+- **GitHub**: `gh issue create --title "..." --body-file /tmp/body.md --label "..." --json number,url`.
 
 ### 2. Set up state directory
 
+Create `~/.parallel-tickets-state/<INIT>/` with:
+
 ```
-~/.parallel-tickets-state/<initiative>/
-├── spec.json       # { tracker, base_branch, repo, tickets: {id: {slug, title, deps, url}} }
-├── state.json      # { "spawned": [] }
-├── prompts/        # one <TICKET>.txt per ticket
-├── worker-template.md
-└── orchestrator-prompt.md
+spec.json          # { tracker, repo, base_branch, tickets: {id: {slug, title, deps, url}} }
+state.json         # { "spawned": [] }
+prompts/           # populated in step 3
+orchestrator.sh    # copied from $CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh
+orch.log           # touch (cron appends here)
+.env               # linear only: LINEAR_API_KEY=... , chmod 600
 ```
-
-Copy `worker-template.md` and `orchestrator-template.md` from this skill's directory; substitute tracker-specific polling block into orchestrator-prompt.md (see §Tracker blocks).
-
-### 3. Render per-ticket worker prompts
-
-For each ticket, sed-substitute `{TICKET}`, `{URL}` into `worker-template.md`, write to `prompts/<TICKET>.txt`.
-
-### 4. Spawn initial workers (tickets with `deps: []`)
-
-For each, run this block (substitute `REPO`, `SLUG`, `TICKET`, `BASE`, `INIT`):
 
 ```bash
-git -C "$REPO" fetch origin "$BASE"
-git -C "$REPO" worktree add -b "worktree-$SLUG" "$REPO/.claude/worktrees/$SLUG" "origin/$BASE"
-tmux new-session -d -s "$SLUG" \
-  -c "$REPO/.claude/worktrees/$SLUG" \
-  "claude --dangerously-skip-permissions \"\$(cat ~/.parallel-tickets-state/$INIT/prompts/$TICKET.txt)\""
-tmux has-session -t "$SLUG" && echo "spawned $TICKET"
+STATE_DIR="$HOME/.parallel-tickets-state/$INIT"
+mkdir -p "$STATE_DIR/prompts"
+touch "$STATE_DIR/orch.log"
+cp "$CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh" "$STATE_DIR/orchestrator.sh"
+chmod +x "$STATE_DIR/orchestrator.sh"
+# If linear:
+#   echo "LINEAR_API_KEY=..." > "$STATE_DIR/.env" && chmod 600 "$STATE_DIR/.env"
 ```
 
-Critical: **always spawn via `tmux new-session -d`**, never via `claude --tmux=classic` directly — the latter deadlocks without a TTY when invoked from non-interactive contexts.
+Write `spec.json` and initial `state.json` (with `"spawned": []`).
 
-Append each successfully-spawned ticket to `state.spawned`.
+### 3. Pre-render ALL per-ticket prompts
 
-### 5. Launch orchestrator
+Not just the initial unblocked ones — render every ticket upfront so the script doesn't need to render at runtime.
 
 ```bash
-tmux new-session -d -s "${INIT}-orch" -c "$REPO" \
-  "claude --dangerously-skip-permissions \"\$(cat ~/.parallel-tickets-state/$INIT/orchestrator-prompt.md)\""
+for TICKET in $(jq -r '.tickets | keys[]' "$STATE_DIR/spec.json"); do
+  URL=$(jq -r --arg t "$TICKET" '.tickets[$t].url' "$STATE_DIR/spec.json")
+  sed -e "s|{TICKET}|$TICKET|g" -e "s|{URL}|$URL|g" \
+    "$CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/worker-template.md" \
+    > "$STATE_DIR/prompts/$TICKET.txt"
+done
 ```
 
-### 6. Merge into one tiled session (default)
+### 4. Create orchestrator tmux session (log tail)
 
-Auto-merge every worker pane into the orchestrator session so the user gets a single `tmux attach` showing everything.
+The orch session isn't a Claude process — it's a `tail -f` of the script's log, so the user can watch the cron-driven script's output live alongside the worker panes.
 
 ```bash
-# Enable mouse + pane title bar on the orch session
+tmux new-session -d -s "${INIT}-orch" "tail -f $STATE_DIR/orch.log"
 tmux set-option -t "${INIT}-orch" mouse on
 tmux setw -t "${INIT}-orch" pane-border-status top
 tmux setw -t "${INIT}-orch" pane-border-format " #{pane_title} "
+tmux select-pane -t "${INIT}-orch:0.0" -T "orchestrator log"
+```
 
-# Title the orchestrator pane
-tmux select-pane -t "${INIT}-orch:0.0" -T "orchestrator"
+### 5. Spawn initial workers (tickets with `deps: []`) and merge into the orch session
 
-# Join each initial worker. After each join-pane, the joined pane becomes active,
-# so `select-pane -T` (no index) titles the just-joined pane.
-for TICKET in $INITIAL_TICKETS; do
-  SLUG=$(jq -r --arg t "$TICKET" '.tickets[$t].slug' ~/.parallel-tickets-state/$INIT/spec.json)
-  tmux join-pane -s "$SLUG" -t "${INIT}-orch"
-  tmux select-pane -t "${INIT}-orch" -T "$TICKET"
+```bash
+for TICKET in $(jq -r '[.tickets | to_entries[] | select(.value.deps | length == 0) | .key][]' "$STATE_DIR/spec.json"); do
+  SLUG=$(jq -r --arg t "$TICKET" '.tickets[$t].slug' "$STATE_DIR/spec.json")
+  git -C "$REPO" fetch origin "$BASE" --quiet
+  git -C "$REPO" worktree add -b "worktree-$SLUG" "$REPO/.claude/worktrees/$SLUG" "origin/$BASE" --quiet
+
+  tmux new-session -d -s "$SLUG" \
+    -c "$REPO/.claude/worktrees/$SLUG" \
+    "claude --dangerously-skip-permissions \"\$(cat $STATE_DIR/prompts/$TICKET.txt)\""
+
+  if tmux has-session -t "$SLUG" 2>/dev/null; then
+    tmux join-pane -s "$SLUG" -t "${INIT}-orch"
+    tmux select-pane -t "${INIT}-orch" -T "$TICKET"
+    jq --arg t "$TICKET" '.spawned += [$t]' "$STATE_DIR/state.json" > "$STATE_DIR/state.json.tmp" \
+      && mv "$STATE_DIR/state.json.tmp" "$STATE_DIR/state.json"
+  fi
 done
-
 tmux select-layout -t "${INIT}-orch" tiled
+```
+
+**Critical:** always spawn via `tmux new-session -d`, never via `claude --tmux=classic` — that flag deadlocks without a real TTY.
+
+### 6. Install cron entry for the orchestrator script
+
+Adds one line to the user's crontab that runs the script every 2 minutes:
+
+```bash
+(crontab -l 2>/dev/null; echo "*/2 * * * * $STATE_DIR/orchestrator.sh $INIT") | crontab -
+```
+
+The script self-removes this cron line once all tickets are spawned.
+
+**macOS caveat**: the cron service needs Full Disk Access on newer macOS versions, or the script won't find things like `gh` / claude session files. As an alternative, install a launchd agent:
+
+```bash
+# Alternative: launchd (macOS-native, no permission prompts)
+# Write ~/Library/LaunchAgents/com.parallel-tickets.<INIT>.plist with StartInterval=120,
+# ProgramArguments=[orchestrator.sh, <INIT>]
+# Then: launchctl load ~/Library/LaunchAgents/com.parallel-tickets.<INIT>.plist
 ```
 
 ### 7. Report to user
 
 - Attach: `tmux attach -t ${INIT}-orch`
-- Controls: `Ctrl+b o` cycle panes, `Ctrl+b d` detach; mouse click/scroll work with mouse mode on
-- Kill everything (destructive): `tmux kill-session -t ${INIT}-orch` — this kills all joined worker panes too, since they now live in this session
-
-## Tracker blocks (for orchestrator-prompt.md)
-
-### Linear
-
-Check if a dep is Done:
-```
-Use Linear MCP `mcp__linear-server__get_issue(id=<dep>)`. If issue.state.name != "Done", dep is not ready.
-```
-
-Worker status updates (document in worker prompt): use `mcp__linear-server__save_issue(id, state: "In Progress"|"In Review"|"Done")`.
-
-### GitHub
-
-Check if a dep is Done:
-```
-Run Bash: `gh issue view <dep_num> --json state --jq .state`. If output != "CLOSED", dep is not ready.
-```
-
-Workers use labels for intermediate states (`gh issue edit <num> --add-label "status:in-progress"`) and `gh issue close <num>` on merge.
+- Mouse click/scroll works; `Ctrl+b o` cycles panes; `Ctrl+b d` detaches
+- Tail the script directly: `tail -f $STATE_DIR/orch.log`
+- Kill everything: `tmux kill-session -t ${INIT}-orch` + remove the cron line (the script keeps all workers alive through the cron; killing the tmux session kills worker panes since they were joined in)
+- Re-install the cron entry if you accidentally remove it
 
 ## Gotchas
 
 - `claude --tmux=classic` deadlocks without a real TTY. Always use `tmux new-session -d`.
 - Workers pause at `/superpowers:brainstorming` checkpoints awaiting human input — operator must attach periodically.
-- `create-and-babysit-pr` only waits until "ready to merge"; use `babysit-pr-until-merged` if the orchestrator must see Done autonomously.
+- `create-and-babysit-pr` only waits until "ready to merge"; if operator wants orchestrator to self-advance to Done autonomously, use `babysit-pr-until-merged` in the worker template.
 - Sibling workers editing overlapping paths will conflict at merge time. Minimize by giving each ticket a disjoint scope.
-- Orchestrator running `/loop` indefinitely costs tokens; auto-terminates after all tickets spawned, but consider setting a hard max via `--max-budget-usd`.
+- When a worker PR merges, the *worker* session must update the tracker (close GH issue / set Linear state to Done). The script polls but doesn't write.
+- The orch tmux session merges worker panes INTO itself via `join-pane`. `tmux kill-session -t <init>-orch` therefore kills all worker panes too. To teardown selectively: `tmux break-pane` first, then kill.
+- Cron runs with a minimal env. Don't assume `$HOME` or PATH; the script exports a safe PATH and reads `$HOME` from inheritance — verify with `env` if things break.
 
-## Files bundled with this skill
+## Files bundled
 
-- `worker-template.md` — minimal per-worker prompt
-- `orchestrator-template.md` — /loop prompt with `{TRACKER_CHECK_BLOCK}` placeholder
+- `worker-template.md` — minimal per-worker prompt (`/superpowers:brainstorming` + ticket URL + orchestrator note)
+- `orchestrator.sh` — the cron-driven bash orchestrator. Copied into each initiative's state dir at setup.
