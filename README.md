@@ -29,10 +29,10 @@ The skill will prompt for:
 Then it:
 
 1. Creates tickets (if needed) in the chosen tracker
-2. Renders per-ticket prompts
-3. Creates git worktrees
-4. Spawns tmux sessions (one per unblocked ticket) with `claude` running inside
-5. Launches an orchestrator that polls the tracker every 2 min and spawns downstream sessions as blockers close/complete
+2. Pre-renders all per-ticket worker prompts
+3. Creates git worktrees for the initial unblocked tickets
+4. Spawns tmux sessions (one per unblocked ticket) with `claude` running inside, joined into a single tiled view
+5. Installs a cron entry that runs `orchestrator.sh` every 2 min — polls the tracker, spawns downstream sessions, self-removes once all tickets are spawned
 
 ## Prereqs
 
