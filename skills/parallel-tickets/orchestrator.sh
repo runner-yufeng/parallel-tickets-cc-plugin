@@ -138,7 +138,10 @@ for ticket in $(jq -r '.tickets | keys[]' "$SPEC"); do
 
   if tmux has-session -t "$ORCH_SESSION" 2>/dev/null; then
     tmux join-pane -s "$slug" -t "$ORCH_SESSION" 2>/dev/null || echo "  warn: join-pane failed"
-    tmux select-pane -t "$ORCH_SESSION" -T "$ticket" 2>/dev/null
+    # Store ticket label in a pane user option so Claude's TUI can't overwrite it.
+    # pane-border-format renders #{@ticket}.
+    title=$(jq -r --arg t "$ticket" '.tickets[$t].title' "$SPEC")
+    tmux set-option -p -t "$ORCH_SESSION" @ticket "$ticket | $title" 2>/dev/null
     tmux select-layout -t "$ORCH_SESSION" tiled 2>/dev/null
   fi
 

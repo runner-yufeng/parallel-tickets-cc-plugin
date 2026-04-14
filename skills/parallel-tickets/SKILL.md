@@ -92,8 +92,10 @@ The orch session isn't a Claude process — it's a `tail -f` of the script's log
 tmux new-session -d -s "${INIT}-orch" "tail -f $STATE_DIR/orch.log"
 tmux set-option -t "${INIT}-orch" mouse on
 tmux setw -t "${INIT}-orch" pane-border-status top
-tmux setw -t "${INIT}-orch" pane-border-format " #{pane_title} "
-tmux select-pane -t "${INIT}-orch:0.0" -T "orchestrator log"
+# Use the @ticket user option (not #{pane_title}) because Claude's TUI
+# overwrites pane_title with its activity string.
+tmux setw -t "${INIT}-orch" pane-border-format " #{@ticket} "
+tmux set-option -p -t "${INIT}-orch:0.0" @ticket "orchestrator log"
 ```
 
 ### 5. Spawn initial workers (tickets with `deps: []`) and merge into the orch session
@@ -110,7 +112,8 @@ for TICKET in $(jq -r '[.tickets | to_entries[] | select(.value.deps | length ==
 
   if tmux has-session -t "$SLUG" 2>/dev/null; then
     tmux join-pane -s "$SLUG" -t "${INIT}-orch"
-    tmux select-pane -t "${INIT}-orch" -T "$TICKET"
+    TITLE=$(jq -r --arg t "$TICKET" '.tickets[$t].title' "$STATE_DIR/spec.json")
+    tmux set-option -p -t "${INIT}-orch" @ticket "$TICKET | $TITLE"
     jq --arg t "$TICKET" '.spawned += [$t]' "$STATE_DIR/state.json" > "$STATE_DIR/state.json.tmp" \
       && mv "$STATE_DIR/state.json.tmp" "$STATE_DIR/state.json"
   fi
