@@ -24,7 +24,14 @@ State dir: `~/.parallel-tickets-state/{INITIATIVE}/`
         "claude --dangerously-skip-permissions \"\$(cat ~/.parallel-tickets-state/$INIT/prompts/$TICKET.txt)\""
       tmux has-session -t "$SLUG" && echo "spawned $TICKET" || echo "FAILED $TICKET"
       ```
-   c. Only on verified-spawn: append `<ticket>` to `state.spawned` and write `state.json`.
+   c. Only on verified-spawn:
+      - Append `<ticket>` to `state.spawned` and write `state.json`.
+      - Join the new worker pane into the orch session so the user sees it in their tiled view:
+        ```bash
+        tmux join-pane -s "$SLUG" -t "{INITIATIVE}-orch"
+        tmux select-pane -t "{INITIATIVE}-orch" -T "$TICKET"
+        tmux select-layout -t "{INITIATIVE}-orch" tiled
+        ```
 3. If every ticket is in state.spawned: print `"Orchestration complete"` and exit the loop.
 4. Otherwise: use ScheduleWakeup — `1500–1800s` if no spawns this iteration, `300–600s` if you just spawned (downstream may unblock soon).
 

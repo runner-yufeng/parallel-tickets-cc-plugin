@@ -85,12 +85,35 @@ tmux new-session -d -s "${INIT}-orch" -c "$REPO" \
   "claude --dangerously-skip-permissions \"\$(cat ~/.parallel-tickets-state/$INIT/orchestrator-prompt.md)\""
 ```
 
-### 6. Report to user
+### 6. Merge into one tiled session (default)
 
-- Print tmux session list
-- Offer to merge into one session: `tmux join-pane -s <slug> -t ${INIT}-orch` for each worker + `tmux select-layout -t ${INIT}-orch tiled`
-- Print attach command: `tmux attach -t ${INIT}-orch`
-- Print how to kill everything if needed: `tmux kill-server` (nuclear) or per-session
+Auto-merge every worker pane into the orchestrator session so the user gets a single `tmux attach` showing everything.
+
+```bash
+# Enable mouse + pane title bar on the orch session
+tmux set-option -t "${INIT}-orch" mouse on
+tmux setw -t "${INIT}-orch" pane-border-status top
+tmux setw -t "${INIT}-orch" pane-border-format " #{pane_title} "
+
+# Title the orchestrator pane
+tmux select-pane -t "${INIT}-orch:0.0" -T "orchestrator"
+
+# Join each initial worker. After each join-pane, the joined pane becomes active,
+# so `select-pane -T` (no index) titles the just-joined pane.
+for TICKET in $INITIAL_TICKETS; do
+  SLUG=$(jq -r --arg t "$TICKET" '.tickets[$t].slug' ~/.parallel-tickets-state/$INIT/spec.json)
+  tmux join-pane -s "$SLUG" -t "${INIT}-orch"
+  tmux select-pane -t "${INIT}-orch" -T "$TICKET"
+done
+
+tmux select-layout -t "${INIT}-orch" tiled
+```
+
+### 7. Report to user
+
+- Attach: `tmux attach -t ${INIT}-orch`
+- Controls: `Ctrl+b o` cycle panes, `Ctrl+b d` detach; mouse click/scroll work with mouse mode on
+- Kill everything (destructive): `tmux kill-session -t ${INIT}-orch` — this kills all joined worker panes too, since they now live in this session
 
 ## Tracker blocks (for orchestrator-prompt.md)
 
