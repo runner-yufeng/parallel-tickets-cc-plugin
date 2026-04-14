@@ -31,14 +31,15 @@ STATE_DIR="$HOME/.parallel-tickets-state/$INITIATIVE"
 SPEC="$STATE_DIR/spec.json"
 STATE="$STATE_DIR/state.json"
 LOG="$STATE_DIR/orch.log"
-LOCK="$STATE_DIR/.lock"
+LOCK_DIR="$STATE_DIR/.lock.d"
 ENV_FILE="$STATE_DIR/.env"
 
-# Single-instance lock — bail silently if a prior run is still going
-exec 200>"$LOCK"
-if ! flock -n 200; then
+# Single-instance lock (mkdir is atomic on every POSIX FS — works on macOS
+# where flock isn't installed by default). Bail silently if a prior run is still going.
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 
 # Route all output to the log
 exec >> "$LOG" 2>&1
