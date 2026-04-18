@@ -94,7 +94,7 @@ tmux set-option -t "${INIT}-orch" mouse on
 tmux setw -t "${INIT}-orch" pane-border-status top
 # Use the @ticket user option (not #{pane_title}) because Claude's TUI
 # overwrites pane_title with its activity string.
-tmux setw -t "${INIT}-orch" pane-border-format " #[fg=brightmagenta,bold]#{@ticket}#[default] "
+tmux setw -t "${INIT}-orch" pane-border-format ' #{?pane_active,#[fg=brightmagenta]#[bold]#{@ticket}#[default],#[fg=brightcyan]#{@ticket}#[default]} '
 # Magenta borders make orchestration panes visually distinct from vanilla
 # Claude Code sessions (which don't use magenta in their TUI).
 tmux set-option -t "${INIT}-orch" pane-border-style "fg=brightcyan"
