@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "DAG-driven parallel Claude Code sessions in tmux panes. Each ticket gets its own worktree + session; an orchestrator spawns downstream as blockers complete.",
-    "version": "0.3.3"
+    "version": "0.4.0"
   },
   "plugins": [
     {
