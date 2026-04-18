@@ -97,8 +97,8 @@ tmux setw -t "${INIT}-orch" pane-border-status top
 tmux setw -t "${INIT}-orch" pane-border-format " #[fg=brightmagenta,bold]#{@ticket}#[default] "
 # Magenta borders make orchestration panes visually distinct from vanilla
 # Claude Code sessions (which don't use magenta in their TUI).
-tmux set-option -t "${INIT}-orch" pane-border-style "fg=magenta"
-tmux set-option -t "${INIT}-orch" pane-active-border-style "fg=brightcyan,bold"
+tmux set-option -t "${INIT}-orch" pane-border-style "fg=brightcyan"
+tmux set-option -t "${INIT}-orch" pane-active-border-style "fg=brightmagenta,bold"
 tmux set-option -p -t "${INIT}-orch:0.0" @ticket "orchestrator log"
 ```
 
