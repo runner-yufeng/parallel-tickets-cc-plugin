@@ -21,6 +21,11 @@
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# macOS cron inherits an unusable cwd (getcwd() returns EPERM under the cron
+# sandbox). `git` calls getcwd() during setup even with `-C <path>`, so we
+# must cd to a readable directory before any git invocation.
+cd "$HOME" 2>/dev/null || cd /
+
 INITIATIVE="${1:-}"
 if [[ -z "$INITIATIVE" ]]; then
   echo "usage: $0 <initiative>" >&2
