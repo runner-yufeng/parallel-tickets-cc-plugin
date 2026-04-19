@@ -59,6 +59,15 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+# Fallback: grep LINEAR_API_KEY out of ~/.zshrc when the state-dir .env is absent.
+# cron does NOT source .zshrc, so we parse the export line directly (no shell eval).
+if [[ -z "${LINEAR_API_KEY:-}" && -f "$HOME/.zshrc" ]]; then
+  LINEAR_API_KEY=$(grep -E '^[[:space:]]*export[[:space:]]+LINEAR_API_KEY=' "$HOME/.zshrc" \
+    | tail -n1 \
+    | sed -E 's/^[[:space:]]*export[[:space:]]+LINEAR_API_KEY=//; s/^"([^"]*)"$/\1/; s/^'\''([^'\'']*)'\''$/\1/')
+  [[ -n "$LINEAR_API_KEY" ]] && export LINEAR_API_KEY
+fi
+
 if [[ ! -f "$SPEC" ]] || [[ ! -f "$STATE" ]]; then
   echo "ERROR: missing $SPEC or $STATE"
   exit 1

@@ -24,7 +24,7 @@ Spin up one Claude session per unblocked ticket, each in its own tmux pane + git
 - `tmux`, `git`, `jq`, `curl` installed
 - `claude` CLI with `--dangerously-skip-permissions` aliased OR explicitly passed
 - `cron` reachable (macOS: may need Full Disk Access for `cron`) OR user prefers `launchd`
-- If tracker=linear: `LINEAR_API_KEY` set in env OR user will provide one
+- If tracker=linear: `LINEAR_API_KEY` — check in order: `$STATE_DIR/.env`, `~/.zshrc` (grep for `export LINEAR_API_KEY=`), current env. If missing from all, ask the user. Orchestrator has a built-in `.zshrc` fallback so a one-time `export LINEAR_API_KEY=...` in `~/.zshrc` works across every future initiative.
 - If tracker=github: `gh auth status` clean
 
 ## Inputs to collect
@@ -37,7 +37,7 @@ Ask the user:
 4. **Dependency edges**: `{ "B": ["A"] }` = B depends on A. Validate: no cycles, no unknown IDs.
 5. **Base branch** (default: repo default; e.g. `dogfood` not `main` in some repos)
 6. **Repo path** (default: `git rev-parse --show-toplevel`)
-7. **Linear API key** (linear only; will be written to `$STATE_DIR/.env` chmod 600)
+7. **Linear API key** (linear only) — check `~/.zshrc` first (`grep -E '^export LINEAR_API_KEY='`). If present, skip asking; the orchestrator reads it from there automatically. Otherwise ask the user and write to `$STATE_DIR/.env` chmod 600.
 
 ## Execution
 
@@ -65,8 +65,9 @@ mkdir -p "$STATE_DIR/prompts"
 touch "$STATE_DIR/orch.log"
 cp "$CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh" "$STATE_DIR/orchestrator.sh"
 chmod +x "$STATE_DIR/orchestrator.sh"
-# If linear:
+# If linear AND key is NOT already in ~/.zshrc:
 #   echo "LINEAR_API_KEY=..." > "$STATE_DIR/.env" && chmod 600 "$STATE_DIR/.env"
+# (orchestrator.sh falls back to parsing ~/.zshrc when $STATE_DIR/.env is missing.)
 ```
 
 Write `spec.json` and initial `state.json` (with `"spawned": []`).
