@@ -167,8 +167,15 @@ done
 total=$(jq '.tickets | length' "$SPEC")
 count=$(jq '.spawned | length' "$STATE")
 if [[ "$total" == "$count" ]]; then
-  echo "[$(date -u +%FT%TZ)] all $total tickets spawned — removing cron entry"
-  (crontab -l 2>/dev/null | grep -v "parallel-tickets-state/$INITIATIVE/orchestrator.sh") | crontab -
+  echo "[$(date -u +%FT%TZ)] all $total tickets spawned — removing periodic runner"
+  # Remove cron entry (Linux)
+  (crontab -l 2>/dev/null | grep -v "parallel-tickets-state/$INITIATIVE/orchestrator.sh") | crontab - 2>/dev/null || true
+  # Unload launchd agent (macOS)
+  PLIST="$HOME/Library/LaunchAgents/com.parallel-tickets.$INITIATIVE.plist"
+  if [[ -f "$PLIST" ]]; then
+    launchctl unload "$PLIST" 2>/dev/null || true
+    rm -f "$PLIST"
+  fi
 fi
 
 echo "[$(date -u +%FT%TZ)] --- end (spawned_this_run=$spawned_this_run) ---"

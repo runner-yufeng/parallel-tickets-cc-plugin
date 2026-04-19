@@ -128,24 +128,41 @@ tmux select-layout -t "${INIT}-orch" tiled
 
 **Critical:** always spawn via `tmux new-session -d`, never via `claude --tmux=classic` — that flag deadlocks without a real TTY.
 
-### 6. Install cron entry for the orchestrator script
+### 6. Install periodic runner
 
-Adds one line to the user's crontab that runs the script every 2 minutes:
+**On macOS: use launchd** (cron is sandboxed and will fail with "Unable to read current working directory: Operation not permitted" on every git call). **On Linux: use cron**.
+
+**macOS (launchd)**:
+
+```bash
+PLIST=~/Library/LaunchAgents/com.parallel-tickets.${INIT}.plist
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.parallel-tickets.${INIT}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>${STATE_DIR}/orchestrator.sh ${INIT}</string>
+  </array>
+  <key>StartInterval</key><integer>120</integer>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>
+EOF
+launchctl load "$PLIST"
+```
+
+**Linux (cron)**:
 
 ```bash
 (crontab -l 2>/dev/null; echo "*/2 * * * * $STATE_DIR/orchestrator.sh $INIT") | crontab -
 ```
 
-The script self-removes this cron line once all tickets are spawned.
-
-**macOS caveat**: the cron service needs Full Disk Access on newer macOS versions, or the script won't find things like `gh` / claude session files. As an alternative, install a launchd agent:
-
-```bash
-# Alternative: launchd (macOS-native, no permission prompts)
-# Write ~/Library/LaunchAgents/com.parallel-tickets.<INIT>.plist with StartInterval=120,
-# ProgramArguments=[orchestrator.sh, <INIT>]
-# Then: launchctl load ~/Library/LaunchAgents/com.parallel-tickets.<INIT>.plist
-```
+The script self-terminates (removes its cron line or requires manual `launchctl unload`) once all tickets are spawned. On launchd, you can unload manually with `launchctl unload ~/Library/LaunchAgents/com.parallel-tickets.${INIT}.plist`.
 
 ### 7. Report to user
 
