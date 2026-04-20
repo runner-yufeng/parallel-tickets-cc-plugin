@@ -170,7 +170,9 @@ if [[ "$total" == "$count" ]]; then
   echo "[$(date -u +%FT%TZ)] all $total tickets spawned — removing periodic runner"
   # Remove cron entry (Linux)
   (crontab -l 2>/dev/null | grep -v "parallel-tickets-state/$INITIATIVE/orchestrator.sh") | crontab - 2>/dev/null || true
-  # Unload launchd agent (macOS)
+  # Kill tmux driver (macOS default)
+  tmux kill-session -t "parallel-tickets-driver-$INITIATIVE" 2>/dev/null || true
+  # Unload launchd agent (legacy, pre-v0.6 installs)
   PLIST="$HOME/Library/LaunchAgents/com.parallel-tickets.$INITIATIVE.plist"
   if [[ -f "$PLIST" ]]; then
     launchctl unload "$PLIST" 2>/dev/null || true

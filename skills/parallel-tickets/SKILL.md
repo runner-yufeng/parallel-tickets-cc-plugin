@@ -130,31 +130,20 @@ tmux select-layout -t "${INIT}-orch" tiled
 
 ### 6. Install periodic runner
 
-**On macOS: use launchd** (cron is sandboxed and will fail with "Unable to read current working directory: Operation not permitted" on every git call). **On Linux: use cron**.
+**On macOS: use a detached tmux driver session.** Both `cron` and `launchd` on recent macOS run inside TCC sandboxes that deny filesystem access to user directories — every `git fetch` hits `fatal: Unable to read current working directory: Operation not permitted`. A tmux-owned shell runs in the user's session and isn't sandboxed.
 
-**macOS (launchd)**:
+**On Linux: cron is fine** (no TCC sandbox).
+
+**macOS (tmux driver)**:
 
 ```bash
-PLIST=~/Library/LaunchAgents/com.parallel-tickets.${INIT}.plist
-cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.parallel-tickets.${INIT}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>-c</string>
-    <string>${STATE_DIR}/orchestrator.sh ${INIT}</string>
-  </array>
-  <key>StartInterval</key><integer>120</integer>
-  <key>RunAtLoad</key><false/>
-</dict>
-</plist>
-EOF
-launchctl load "$PLIST"
+tmux new-session -d -s "parallel-tickets-driver-${INIT}" \
+  "while true; do ${STATE_DIR}/orchestrator.sh ${INIT}; sleep 120; done"
 ```
+
+The driver is a headless tmux session (never attached to) that re-runs the orchestrator every 120 s. No panes are joined into this session — it's a process host only. The script self-terminates by killing this driver session once all tickets are spawned.
+
+**Tradeoff**: the driver dies when the tmux server exits (reboot, `tmux kill-server`). Restart with the same command above. Cron survives reboot; the driver doesn't.
 
 **Linux (cron)**:
 
@@ -162,7 +151,7 @@ launchctl load "$PLIST"
 (crontab -l 2>/dev/null; echo "*/2 * * * * $STATE_DIR/orchestrator.sh $INIT") | crontab -
 ```
 
-The script self-terminates (removes its cron line or requires manual `launchctl unload`) once all tickets are spawned. On launchd, you can unload manually with `launchctl unload ~/Library/LaunchAgents/com.parallel-tickets.${INIT}.plist`.
+The orchestrator's self-teardown handles both: kills the tmux driver AND removes the cron entry once every ticket is spawned.
 
 ### 7. Report to user
 
