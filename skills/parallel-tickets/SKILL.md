@@ -165,7 +165,7 @@ The orchestrator's self-teardown handles both: kills the tmux driver AND removes
 ## Gotchas
 
 - `claude --tmux=classic` deadlocks without a real TTY. Always use `tmux new-session -d`.
-- Workers pause at `/superpowers:brainstorming` checkpoints awaiting human input — operator must attach periodically.
+- Workers follow the `/tdd` red-green-refactor loop; they may block when tests reveal an ambiguous requirement and await operator input — attach periodically.
 - `create-and-babysit-pr` only waits until "ready to merge"; if operator wants orchestrator to self-advance to Done autonomously, use `babysit-pr-until-merged` in the worker template.
 - Sibling workers editing overlapping paths will conflict at merge time. Minimize by giving each ticket a disjoint scope.
 - When a worker PR merges, the *worker* session must update the tracker (close GH issue / set Linear state to Done). The script polls but doesn't write.
@@ -174,5 +174,5 @@ The orchestrator's self-teardown handles both: kills the tmux driver AND removes
 
 ## Files bundled
 
-- `worker-template.md` — minimal per-worker prompt (`/superpowers:brainstorming` + ticket URL + orchestrator note)
+- `worker-template.md` — minimal per-worker prompt (`/tdd` + ticket URL + orchestrator note)
 - `orchestrator.sh` — the cron-driven bash orchestrator. Copied into each initiative's state dir at setup.

@@ -1,4 +1,4 @@
-/superpowers:brainstorming
+/tdd
 
 Work on ticket {TICKET}: {URL}
 
