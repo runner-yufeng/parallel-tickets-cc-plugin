@@ -9,15 +9,16 @@ Spin up one Claude session per unblocked ticket, each in its own tmux pane + git
 
 ## When to use
 
-- 3+ tickets that can be parallelized
-- At least some have dependencies (ticket DAG)
-- User wants isolated sessions/worktrees, not one session doing everything serially
+- Dependency DAG of 3+ tickets. **The count of initially unblocked tickets doesn't matter** — the orchestrator spawns downstream sessions as blockers complete, so a DAG rooted at a single seed ticket (narrow start, fan-out later) is a valid target. Do not decline the skill on the grounds that "only one ticket is unblocked right now."
+- User wants isolated sessions/worktrees + auto-progression through the DAG so the operator doesn't have to manually kick off each next ticket as its blockers land.
+- DAG has at least some fan-out (at some point ≥2 tickets run concurrently). If the graph is a pure serial chain with no parallelism ever, the value is only auto-progression, which is still useful but weaker — weigh against the scheduler overhead.
 
 ## When NOT to use
 
-- Single ticket (overkill)
-- Tickets touch heavily overlapping files (merge conflicts dominate)
-- Short (<30 min) tasks where worktree setup overhead exceeds the work
+- A single ticket with no downstream work (overkill — run `claude` directly in a worktree). This is distinct from "a DAG whose first layer contains a single ticket," which **is** a valid use case.
+- Tickets touch heavily overlapping files so that merge conflicts dominate. Split into disjoint vertical slices first, then use this skill on the restructured DAG.
+- Short (<30 min) tasks where worktree setup overhead exceeds the work.
+- The operator needs to make architectural decisions at every checkpoint anyway. If HITL babysitting is unavoidable across every ticket, the parallelism benefit collapses — run the affected slices interactively and use the skill for the downstream AFK batch.
 
 ## Prereqs (verify first, don't assume)
 
