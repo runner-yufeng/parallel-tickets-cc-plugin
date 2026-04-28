@@ -7,6 +7,10 @@ description: Orchestrate parallel Claude Code sessions working on a DAG of ticke
 
 Spin up one Claude session per unblocked ticket, each in its own tmux pane + git worktree. A deterministic bash script (not a Claude session) polls the tracker every 2 min and spawns downstream sessions as blockers complete.
 
+**Concurrency cap**: at most `MAX_PARALLEL` (default **5**) worker panes alive at any time. The orchestrator counts live worker panes each iteration; when capacity frees up (a pane closes), it spawns the next eligible ticket. Override by exporting `MAX_PARALLEL=N` before the driver starts.
+
+**Auto-cleanup**: when a worker's pane is gone AND its tracker status is Done/Closed, the orchestrator removes the worktree directory (`git worktree remove --force`). The local branch is left intact so you can audit it before deleting manually.
+
 ## When to use
 
 - Dependency DAG of 3+ tickets. **The count of initially unblocked tickets doesn't matter** — the orchestrator spawns downstream sessions as blockers complete, so a DAG rooted at a single seed ticket (narrow start, fan-out later) is a valid target. Do not decline the skill on the grounds that "only one ticket is unblocked right now."
@@ -53,7 +57,7 @@ Create `~/.parallel-tickets-state/<INIT>/` with:
 
 ```
 spec.json          # { tracker, repo, base_branch, tickets: {id: {slug, title, deps, url}} }
-state.json         # { "spawned": [] }
+state.json         # { "spawned": [], "cleaned": [] }
 prompts/           # populated in step 3
 orchestrator.sh    # copied from $CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh
 orch.log           # touch (cron appends here)
@@ -71,7 +75,7 @@ chmod +x "$STATE_DIR/orchestrator.sh"
 # (orchestrator.sh falls back to parsing ~/.zshrc when $STATE_DIR/.env is missing.)
 ```
 
-Write `spec.json` and initial `state.json` (with `"spawned": []`).
+Write `spec.json` and initial `state.json` (with `"spawned": []` and `"cleaned": []`).
 
 ### 3. Pre-render ALL per-ticket prompts
 
@@ -106,8 +110,13 @@ tmux set-option -p -t "${INIT}-orch:0.0" @ticket "orchestrator log"
 
 ### 5. Spawn initial workers (tickets with `deps: []`) and merge into the orch session
 
+Cap the initial spawn at `MAX_PARALLEL` (default 5). If the root layer has more than 5 unblocked tickets, the orchestrator picks up the rest on its first iteration.
+
 ```bash
+MAX_PARALLEL="${MAX_PARALLEL:-5}"
+spawned=0
 for TICKET in $(jq -r '[.tickets | to_entries[] | select(.value.deps | length == 0) | .key][]' "$STATE_DIR/spec.json"); do
+  if (( spawned >= MAX_PARALLEL )); then break; fi
   SLUG=$(jq -r --arg t "$TICKET" '.tickets[$t].slug' "$STATE_DIR/spec.json")
   git -C "$REPO" fetch origin "$BASE" --quiet
   git -C "$REPO" worktree add -b "worktree-$SLUG" "$REPO/.claude/worktrees/$SLUG" "origin/$BASE" --quiet
@@ -122,6 +131,7 @@ for TICKET in $(jq -r '[.tickets | to_entries[] | select(.value.deps | length ==
     tmux set-option -p -t "${INIT}-orch" @ticket "$TICKET | $TITLE"
     jq --arg t "$TICKET" '.spawned += [$t]' "$STATE_DIR/state.json" > "$STATE_DIR/state.json.tmp" \
       && mv "$STATE_DIR/state.json.tmp" "$STATE_DIR/state.json"
+    spawned=$((spawned + 1))
   fi
 done
 tmux select-layout -t "${INIT}-orch" tiled
@@ -169,6 +179,8 @@ The orchestrator's self-teardown handles both: kills the tmux driver AND removes
 - `create-and-babysit-pr` only waits until "ready to merge"; if operator wants orchestrator to self-advance to Done autonomously, use `babysit-pr-until-merged` in the worker template.
 - Sibling workers editing overlapping paths will conflict at merge time. Minimize by giving each ticket a disjoint scope.
 - When a worker PR merges, the *worker* session must update the tracker (close GH issue / set Linear state to Done). The script polls but doesn't write.
+- Auto-cleanup is gated on **both** "pane closed" AND "ticket Done/Closed". If you close a pane while the ticket is still open, the worktree is preserved; cleanup runs on the next iteration after the tracker flips to Done. If a ticket is abandoned (closed without merge / left in some non-Done state), the worktree stays — remove it manually with `git worktree remove`.
+- Periodic-runner self-teardown waits for **all spawned AND zero active panes** (was: "all spawned"). This keeps the orchestrator alive long enough to clean up worktrees as later PRs merge. If you abandon tickets without closing their panes, the driver runs forever — kill it manually with `tmux kill-session -t parallel-tickets-driver-<INIT>`.
 - The orch tmux session merges worker panes INTO itself via `join-pane`. `tmux kill-session -t <init>-orch` therefore kills all worker panes too. To teardown selectively: `tmux break-pane` first, then kill.
 - Cron runs with a minimal env. Don't assume `$HOME` or PATH; the script exports a safe PATH and reads `$HOME` from inheritance — verify with `env` if things break.
 

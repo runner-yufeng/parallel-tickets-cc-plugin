@@ -21,6 +21,10 @@
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# Concurrency cap: at most this many worker panes alive at once. Override with
+# MAX_PARALLEL=N in the environment (e.g. exported in the launching shell).
+MAX_PARALLEL="${MAX_PARALLEL:-5}"
+
 # macOS cron inherits an unusable cwd (getcwd() returns EPERM under the cron
 # sandbox). `git` calls getcwd() during setup even with `-C <path>`, so we
 # must cd to a readable directory before any git invocation.
@@ -102,11 +106,73 @@ dep_is_done() {
   esac
 }
 
+# Discover which spawned tickets still have a live pane in the orch session.
+# We tag each pane with the user option @ticket = "TICKET_ID | TITLE" at spawn
+# time, so the ticket id is the prefix before " |". The orchestrator-log pane
+# uses @ticket = "orchestrator log" and is filtered out by matching against the
+# known ticket id set below.
+ACTIVE_TICKETS=()
+if tmux has-session -t "$ORCH_SESSION" 2>/dev/null; then
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    ACTIVE_TICKETS+=("${line%% |*}")
+  done < <(tmux list-panes -t "$ORCH_SESSION" -F '#{@ticket}' 2>/dev/null)
+fi
+
+is_active_ticket() {
+  local t="$1"
+  local a
+  (( ${#ACTIVE_TICKETS[@]} == 0 )) && return 1
+  for a in "${ACTIVE_TICKETS[@]}"; do
+    [[ "$a" == "$t" ]] && return 0
+  done
+  return 1
+}
+
+# Count active panes that correspond to known tickets (drops "orchestrator log"
+# and any stray panes the operator added).
+active_count=0
+for known in $(jq -r '.tickets | keys[]' "$SPEC"); do
+  is_active_ticket "$known" && active_count=$((active_count + 1))
+done
+echo "  active=$active_count cap=$MAX_PARALLEL"
+
+# Cleanup pass: any spawned ticket whose pane is gone AND whose tracker status
+# is Done/Closed gets its worktree removed. Tracked in state.cleaned so we
+# don't retry every iteration.
+for ticket in $(jq -r '.spawned[]?' "$STATE"); do
+  if jq -e --arg t "$ticket" '(.cleaned // []) | index($t)' "$STATE" > /dev/null; then
+    continue
+  fi
+  is_active_ticket "$ticket" && continue
+  status=$(check_dep_status "$ticket")
+  if ! dep_is_done "$status"; then
+    echo "  $ticket pane closed but status=${status:-unknown} — leaving worktree"
+    continue
+  fi
+  slug=$(jq -r --arg t "$ticket" '.tickets[$t].slug' "$SPEC")
+  worktree="$REPO/.claude/worktrees/$slug"
+  if [[ -d "$worktree" ]]; then
+    if git -C "$REPO" worktree remove --force "$worktree" 2>/dev/null; then
+      echo "  ✓ removed worktree $worktree (ticket $ticket done, pane closed)"
+    else
+      echo "  warn: failed to remove worktree $worktree"
+    fi
+  fi
+  jq --arg t "$ticket" '.cleaned = ((.cleaned // []) + [$t])' "$STATE" > "$STATE.tmp" \
+    && mv "$STATE.tmp" "$STATE"
+done
+
 spawned_this_run=0
 
 for ticket in $(jq -r '.tickets | keys[]' "$SPEC"); do
   if jq -e --arg t "$ticket" '.spawned | index($t)' "$STATE" > /dev/null; then
     continue
+  fi
+
+  if (( active_count >= MAX_PARALLEL )); then
+    echo "  cap reached ($active_count/$MAX_PARALLEL) — deferring remaining tickets"
+    break
   fi
 
   deps=$(jq -r --arg t "$ticket" '.tickets[$t].deps[]?' "$SPEC")
@@ -161,13 +227,16 @@ for ticket in $(jq -r '.tickets | keys[]' "$SPEC"); do
 
   jq --arg t "$ticket" '.spawned += [$t]' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
   spawned_this_run=$((spawned_this_run + 1))
+  active_count=$((active_count + 1))
   echo "  ✓ spawned $ticket"
 done
 
 total=$(jq '.tickets | length' "$SPEC")
 count=$(jq '.spawned | length' "$STATE")
-if [[ "$total" == "$count" ]]; then
-  echo "[$(date -u +%FT%TZ)] all $total tickets spawned — removing periodic runner"
+# Self-teardown only when every ticket has been spawned AND every worker pane
+# has closed (so any pending cleanup pass had a chance to remove worktrees).
+if [[ "$total" == "$count" && "$active_count" -eq 0 ]]; then
+  echo "[$(date -u +%FT%TZ)] all $total tickets spawned and no active panes — removing periodic runner"
   # Remove cron entry (Linux)
   (crontab -l 2>/dev/null | grep -v "parallel-tickets-state/$INITIATIVE/orchestrator.sh") | crontab - 2>/dev/null || true
   # Kill tmux driver (macOS default)
