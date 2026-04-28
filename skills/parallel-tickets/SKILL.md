@@ -56,7 +56,7 @@ Ask the user:
 Create `~/.parallel-tickets-state/<INIT>/` with:
 
 ```
-spec.json          # { tracker, repo, base_branch, tickets: {id: {slug, title, deps, url}} }
+spec.json          # { tracker, repo, base_branch, tickets: {id: {slug, title, deps, url, mode}} }
 state.json         # { "spawned": [], "cleaned": [] }
 prompts/           # populated in step 3
 orchestrator.sh    # copied from $CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh
@@ -77,14 +77,29 @@ chmod +x "$STATE_DIR/orchestrator.sh"
 
 Write `spec.json` and initial `state.json` (with `"spawned": []` and `"cleaned": []`).
 
-### 3. Pre-render ALL per-ticket prompts
+### 3. Pick a mode per ticket, then pre-render ALL prompts
 
-Not just the initial unblocked ones — render every ticket upfront so the script doesn't need to render at runtime.
+For each ticket, read its title + body and pick `mode`:
+
+- **`tdd`** (default): clear acceptance criteria — bug fix, feature with defined behavior, refactor that should preserve tests. The "write a failing test, then make it pass" loop fits.
+- **`brainstorming`**: exploratory — "figure out how to…", design RFC, "should we use X or Y?", no acceptance criteria, needs operator dialogue before code lands.
+- **`none`**: trivial mechanical work — dep bump, rename, doc-only change, copy edit. Or anything where `/tdd`'s test-first loop would fight the work.
+
+If unsure, default to `tdd`. The operator can edit `spec.json` before any worker spawns to override.
+
+Write each ticket's chosen mode into `spec.json` under `.tickets[<id>].mode`. Then pre-render every ticket's prompt upfront so the orchestrator doesn't render at runtime:
 
 ```bash
 for TICKET in $(jq -r '.tickets | keys[]' "$STATE_DIR/spec.json"); do
-  URL=$(jq -r --arg t "$TICKET" '.tickets[$t].url' "$STATE_DIR/spec.json")
-  sed -e "s|{TICKET}|$TICKET|g" -e "s|{URL}|$URL|g" \
+  URL=$(jq -r --arg t "$TICKET"  '.tickets[$t].url'  "$STATE_DIR/spec.json")
+  MODE=$(jq -r --arg t "$TICKET" '.tickets[$t].mode' "$STATE_DIR/spec.json")
+  case "$MODE" in
+    tdd)           DIRECTIVE='/tdd' ;;
+    brainstorming) DIRECTIVE='/superpowers:brainstorming' ;;
+    none|null|"")  DIRECTIVE='' ;;
+    *) echo "unknown mode '$MODE' for $TICKET" >&2; exit 1 ;;
+  esac
+  sed -e "s|{TICKET}|$TICKET|g" -e "s|{URL}|$URL|g" -e "s|{DIRECTIVE}|$DIRECTIVE|g" \
     "$CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/worker-template.md" \
     > "$STATE_DIR/prompts/$TICKET.txt"
 done
@@ -186,5 +201,5 @@ The orchestrator's self-teardown handles both: kills the tmux driver AND removes
 
 ## Files bundled
 
-- `worker-template.md` — minimal per-worker prompt (`/tdd` + ticket URL + orchestrator note)
+- `worker-template.md` — minimal per-worker prompt with `{DIRECTIVE}` placeholder. The directive is one of `/tdd`, `/superpowers:brainstorming`, or empty depending on the ticket's mode (chosen at setup, see step 3).
 - `orchestrator.sh` — the cron-driven bash orchestrator. Copied into each initiative's state dir at setup.
