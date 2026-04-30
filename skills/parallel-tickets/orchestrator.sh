@@ -82,7 +82,9 @@ REPO=$(jq -r '.repo' "$SPEC")
 BASE=$(jq -r '.base_branch' "$SPEC")
 # Where worktrees get created. Captured at setup time so changing the env var
 # later doesn't disturb running initiatives. Falls back to the legacy in-repo
-# path for spec.json files written before v0.10.
+# path for spec.json files written before v0.10. The setup step writes the
+# fully-resolved path here (env-var case includes the repo basename suffix), so
+# this script just reads it as-is — no further computation.
 WORKTREE_BASE=$(jq -r '.worktree_base // empty' "$SPEC")
 WORKTREE_BASE="${WORKTREE_BASE:-$REPO/.claude/worktrees}"
 ORCH_SESSION="${INITIATIVE}-orch"

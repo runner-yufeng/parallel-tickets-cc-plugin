@@ -43,7 +43,7 @@ Ask the user:
 5. **Base branch** (default: repo default; e.g. `dogfood` not `main` in some repos)
 6. **Repo path** (default: `git rev-parse --show-toplevel`)
 7. **Linear API key** (linear only) — check `~/.zshrc` first (`grep -E '^export LINEAR_API_KEY='`). If present, skip asking; the orchestrator reads it from there automatically. Otherwise ask the user and write to `$STATE_DIR/.env` chmod 600.
-8. **Worktree base directory** (optional) — where to put per-ticket worktrees. Defaults to `$REPO/.claude/worktrees`. To put worktrees on a different volume (e.g. an external SSD), set `PARALLEL_TICKETS_WORKTREE_BASE` in the launching shell, or pass an absolute path. Captured into `spec.json` at setup time so changing the env var later doesn't disturb running initiatives.
+8. **Worktree base directory** (optional) — where to put per-ticket worktrees. Defaults to `$REPO/.claude/worktrees`. Set `PARALLEL_TICKETS_WORKTREE_BASE` in the launching shell to put them on a different volume (e.g. external SSD). When the env var is set, the resolved layout is `$PARALLEL_TICKETS_WORKTREE_BASE/<repo-basename>/<slug>` so multiple repos can share one base without colliding (mirrors superset's `~/.superset/worktrees/<repo>/<slug>` layout). Captured into `spec.json` at setup time so changing the env var later doesn't disturb running initiatives.
 
 ## Execution
 
@@ -79,8 +79,13 @@ chmod +x "$STATE_DIR/orchestrator.sh"
 Write `spec.json` and initial `state.json` (with `"spawned": []` and `"cleaned": []`). Resolve `worktree_base` once at setup:
 
 ```bash
-WORKTREE_BASE="${PARALLEL_TICKETS_WORKTREE_BASE:-$REPO/.claude/worktrees}"
-# include in spec.json so the orchestrator and the initial-spawn step agree
+if [[ -n "${PARALLEL_TICKETS_WORKTREE_BASE:-}" ]]; then
+  WORKTREE_BASE="$PARALLEL_TICKETS_WORKTREE_BASE/$(basename "$REPO")"
+else
+  WORKTREE_BASE="$REPO/.claude/worktrees"
+fi
+# include the resolved value in spec.json so the orchestrator and the
+# initial-spawn step both use the exact same path (no env-var drift later).
 ```
 
 ### 3. Pick a mode per ticket, then pre-render ALL prompts
