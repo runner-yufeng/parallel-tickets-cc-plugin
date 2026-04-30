@@ -43,6 +43,7 @@ Ask the user:
 5. **Base branch** (default: repo default; e.g. `dogfood` not `main` in some repos)
 6. **Repo path** (default: `git rev-parse --show-toplevel`)
 7. **Linear API key** (linear only) — check `~/.zshrc` first (`grep -E '^export LINEAR_API_KEY='`). If present, skip asking; the orchestrator reads it from there automatically. Otherwise ask the user and write to `$STATE_DIR/.env` chmod 600.
+8. **Worktree base directory** (optional) — where to put per-ticket worktrees. Defaults to `$REPO/.claude/worktrees`. To put worktrees on a different volume (e.g. an external SSD), set `PARALLEL_TICKETS_WORKTREE_BASE` in the launching shell, or pass an absolute path. Captured into `spec.json` at setup time so changing the env var later doesn't disturb running initiatives.
 
 ## Execution
 
@@ -56,7 +57,7 @@ Ask the user:
 Create `~/.parallel-tickets-state/<INIT>/` with:
 
 ```
-spec.json          # { tracker, repo, base_branch, tickets: {id: {slug, title, deps, url, mode}} }
+spec.json          # { tracker, repo, base_branch, worktree_base, tickets: {id: {slug, title, deps, url, mode}} }
 state.json         # { "spawned": [], "cleaned": [] }
 prompts/           # populated in step 3
 orchestrator.sh    # copied from $CLAUDE_PLUGIN_ROOT/skills/parallel-tickets/orchestrator.sh
@@ -75,7 +76,12 @@ chmod +x "$STATE_DIR/orchestrator.sh"
 # (orchestrator.sh falls back to parsing ~/.zshrc when $STATE_DIR/.env is missing.)
 ```
 
-Write `spec.json` and initial `state.json` (with `"spawned": []` and `"cleaned": []`).
+Write `spec.json` and initial `state.json` (with `"spawned": []` and `"cleaned": []`). Resolve `worktree_base` once at setup:
+
+```bash
+WORKTREE_BASE="${PARALLEL_TICKETS_WORKTREE_BASE:-$REPO/.claude/worktrees}"
+# include in spec.json so the orchestrator and the initial-spawn step agree
+```
 
 ### 3. Pick a mode per ticket, then pre-render ALL prompts
 
@@ -129,15 +135,18 @@ Cap the initial spawn at `MAX_PARALLEL` (default 5). If the root layer has more 
 
 ```bash
 MAX_PARALLEL="${MAX_PARALLEL:-5}"
+WORKTREE_BASE=$(jq -r '.worktree_base // empty' "$STATE_DIR/spec.json")
+WORKTREE_BASE="${WORKTREE_BASE:-$REPO/.claude/worktrees}"
+mkdir -p "$WORKTREE_BASE"
 spawned=0
 for TICKET in $(jq -r '[.tickets | to_entries[] | select(.value.deps | length == 0) | .key][]' "$STATE_DIR/spec.json"); do
   if (( spawned >= MAX_PARALLEL )); then break; fi
   SLUG=$(jq -r --arg t "$TICKET" '.tickets[$t].slug' "$STATE_DIR/spec.json")
   git -C "$REPO" fetch origin "$BASE" --quiet
-  git -C "$REPO" worktree add -b "worktree-$SLUG" "$REPO/.claude/worktrees/$SLUG" "origin/$BASE" --quiet
+  git -C "$REPO" worktree add -b "worktree-$SLUG" "$WORKTREE_BASE/$SLUG" "origin/$BASE" --quiet
 
   tmux new-session -d -s "$SLUG" \
-    -c "$REPO/.claude/worktrees/$SLUG" \
+    -c "$WORKTREE_BASE/$SLUG" \
     "claude --dangerously-skip-permissions \"\$(cat $STATE_DIR/prompts/$TICKET.txt)\""
 
   if tmux has-session -t "$SLUG" 2>/dev/null; then

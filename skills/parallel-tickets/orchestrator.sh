@@ -80,6 +80,11 @@ fi
 TRACKER=$(jq -r '.tracker' "$SPEC")
 REPO=$(jq -r '.repo' "$SPEC")
 BASE=$(jq -r '.base_branch' "$SPEC")
+# Where worktrees get created. Captured at setup time so changing the env var
+# later doesn't disturb running initiatives. Falls back to the legacy in-repo
+# path for spec.json files written before v0.10.
+WORKTREE_BASE=$(jq -r '.worktree_base // empty' "$SPEC")
+WORKTREE_BASE="${WORKTREE_BASE:-$REPO/.claude/worktrees}"
 ORCH_SESSION="${INITIATIVE}-orch"
 
 check_dep_status() {
@@ -151,7 +156,7 @@ for ticket in $(jq -r '.spawned[]?' "$STATE"); do
     continue
   fi
   slug=$(jq -r --arg t "$ticket" '.tickets[$t].slug' "$SPEC")
-  worktree="$REPO/.claude/worktrees/$slug"
+  worktree="$WORKTREE_BASE/$slug"
   if [[ -d "$worktree" ]]; then
     if git -C "$REPO" worktree remove --force "$worktree" 2>/dev/null; then
       echo "  ✓ removed worktree $worktree (ticket $ticket done, pane closed)"
@@ -189,7 +194,7 @@ for ticket in $(jq -r '.tickets | keys[]' "$SPEC"); do
   [[ "$all_done" != "true" ]] && continue
 
   slug=$(jq -r --arg t "$ticket" '.tickets[$t].slug' "$SPEC")
-  worktree="$REPO/.claude/worktrees/$slug"
+  worktree="$WORKTREE_BASE/$slug"
 
   if [[ -d "$worktree" ]]; then
     echo "  skip $ticket: worktree $worktree already exists"
@@ -202,6 +207,8 @@ for ticket in $(jq -r '.tickets | keys[]' "$SPEC"); do
     echo "  ERROR: fetch origin $BASE failed for $ticket"
     continue
   fi
+
+  mkdir -p "$WORKTREE_BASE"
 
   if ! git -C "$REPO" worktree add -b "worktree-$slug" "$worktree" "origin/$BASE" --quiet; then
     echo "  ERROR: worktree add failed for $ticket"
